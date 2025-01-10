@@ -9,80 +9,82 @@ import (
 	"time"
 )
 
-const apiKey = "270e52f7980a4cbe870231539240112" // Replace with your actual WeatherAPI.com API key
-const baseURL = "https://api.weatherapi.com/v1"
-
-type LocationResponse struct {
-	Location struct {
-		Name      string `json:"name"`
-		Region    string `json:"region"`
-		Country   string `json:"country"`
-	} `json:"location"`
-}
+const (
+	baseURL    = "https://api.open-meteo.com/v1/forecast"
+	geocodeURL = "https://geocoding-api.open-meteo.com/v1/search"
+)
 
 type WeatherResponse struct {
-	Forecast struct {
-		Forecastday []struct {
-			Date string `json:"date"`
-			Day  struct {
-				MaxtempF float64 `json:"maxtemp_f"`
-				MintempF float64 `json:"mintemp_f"`
-			} `json:"day"`
-		} `json:"forecastday"`
-	} `json:"forecast"`
+	Daily struct {
+		Time           []string  `json:"time"`
+		TemperatureMax []float64 `json:"temperature_2m_max"`
+		TemperatureMin []float64 `json:"temperature_2m_min"`
+	} `json:"daily"`
+}
+
+type GeocodeResponse struct {
+	Results []struct {
+		Latitude  float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+	} `json:"results"`
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run weather.go <ZIP_CODE>")
+		fmt.Println("Usage: go run weather.go <CITY_NAME>")
 		return
 	}
 
-	zipCode := os.Args[1]
+	city := os.Args[1]
 
-	// Step 1: Fetch location information (city and state)
-	locationURL := fmt.Sprintf("%s/current.json?key=%s&q=%s", baseURL, apiKey, zipCode)
-	locationData, err := fetchLocation(locationURL)
+	// Get coordinates from city name
+	latitude, longitude, err := getCoordinates(city)
 	if err != nil {
-		fmt.Printf("Failed to get location data: %v\n", err)
+		fmt.Printf("Failed to get coordinates: %v\n", err)
 		return
 	}
 
-	// Step 2: Fetch 5-day weather forecast
-	forecastURL := fmt.Sprintf("%s/forecast.json?key=%s&q=%s&days=5", baseURL, apiKey, zipCode)
+	// Fetch 5-day weather forecast
+	forecastURL := fmt.Sprintf("%s?latitude=%f&longitude=%f&daily=temperature_2m_max,temperature_2m_min&timezone=auto", baseURL, latitude, longitude)
 	weatherData, err := fetchForecast(forecastURL)
 	if err != nil {
 		fmt.Printf("Failed to get weather data: %v\n", err)
 		return
 	}
 
-	// Output the forecast with the city and state
-	fmt.Printf("Weather forecast for %s, %s:\n", locationData.Location.Name, locationData.Location.Region)
+	// Output the forecast
+	fmt.Printf("Weather forecast for %s:\n", city)
 	display5DayForecast(weatherData)
 }
 
-func fetchLocation(url string) (*LocationResponse, error) {
+func getCoordinates(city string) (float64, float64, error) {
+	url := fmt.Sprintf("%s?name=%s", geocodeURL, city)
 	resp, err := http.Get(url)
 	if err != nil {
-		return nil, err
+		return 0, 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Error: %s\nResponse Body: %s", resp.Status, string(body))
+		return 0, 0, fmt.Errorf("Error: %s\nResponse Body: %s", resp.Status, string(body))
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return 0, 0, err
 	}
 
-	var locationData LocationResponse
-	if err := json.Unmarshal(body, &locationData); err != nil {
-		return nil, err
+	var geocodeData GeocodeResponse
+	if err := json.Unmarshal(body, &geocodeData); err != nil {
+		return 0, 0, err
 	}
-	return &locationData, nil
+
+	if len(geocodeData.Results) == 0 {
+		return 0, 0, fmt.Errorf("No results found for city: %s", city)
+	}
+
+	return geocodeData.Results[0].Latitude, geocodeData.Results[0].Longitude, nil
 }
 
 func fetchForecast(url string) (*WeatherResponse, error) {
@@ -111,14 +113,14 @@ func fetchForecast(url string) (*WeatherResponse, error) {
 
 func display5DayForecast(data *WeatherResponse) {
 	fmt.Println("\n5-Day Forecast:")
-	for _, day := range data.Forecast.Forecastday {
+	for i, date := range data.Daily.Time {
 		// Parse the date to get the day of the week
-		date, err := time.Parse("2006-01-02", day.Date)
+		parsedDate, err := time.Parse("2006-01-02", date)
 		if err != nil {
 			fmt.Printf("Failed to parse date: %v\n", err)
 			continue
 		}
-		dayOfWeek := date.Weekday()
-		fmt.Printf("%s (%s) - High: %.1f°F, Low: %.1f°F\n", dayOfWeek, day.Date, day.Day.MaxtempF, day.Day.MintempF)
+		dayOfWeek := parsedDate.Weekday()
+		fmt.Printf("%s (%s) - High: %.1f°C, Low: %.1f°C\n", dayOfWeek, date, data.Daily.TemperatureMax[i], data.Daily.TemperatureMin[i])
 	}
 }
